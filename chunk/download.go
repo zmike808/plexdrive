@@ -2,6 +2,7 @@ package chunk
 
 import (
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"strings"
@@ -14,20 +15,22 @@ import (
 
 // Downloader handles concurrent chunk downloads
 type Downloader struct {
-	Client    *drive.Client
-	queue     chan *Request
-	callbacks map[string][]DownloadCallback
-	lock      sync.Mutex
+	Client     *drive.Client
+	queue      chan *Request
+	callbacks  map[string][]DownloadCallback
+	lock       sync.Mutex
+	bufferPool sync.Pool
 }
 
 type DownloadCallback func(error, []byte)
 
 // NewDownloader creates a new download manager
-func NewDownloader(threads int, client *drive.Client) (*Downloader, error) {
+func NewDownloader(threads int, client *drive.Client, bufferPool sync.Pool) (*Downloader, error) {
 	manager := Downloader{
-		Client:    client,
-		queue:     make(chan *Request, 100),
-		callbacks: make(map[string][]DownloadCallback, 100),
+		Client:     client,
+		queue:      make(chan *Request, 100),
+		callbacks:  make(map[string][]DownloadCallback, 100),
+		bufferPool: bufferPool,
 	}
 
 	for i := 0; i < threads; i++ {
@@ -57,7 +60,7 @@ func (d *Downloader) thread() {
 
 func (d *Downloader) download(client *http.Client, req *Request) {
 	Log.Debugf("Starting download %v (preload: %v)", req.id, req.preload)
-	bytes, err := downloadFromAPI(client, req, 0)
+	bytes, err := d.downloadFromAPI(client, req, 0)
 
 	d.lock.Lock()
 	callbacks := d.callbacks[req.id]
@@ -65,10 +68,13 @@ func (d *Downloader) download(client *http.Client, req *Request) {
 		callback(err, bytes)
 	}
 	delete(d.callbacks, req.id)
+	if nil != err {
+		d.bufferPool.Put(bytes)
+	}
 	d.lock.Unlock()
 }
 
-func downloadFromAPI(client *http.Client, request *Request, delay int64) ([]byte, error) {
+func (d *Downloader) downloadFromAPI(client *http.Client, request *Request, delay int64) ([]byte, error) {
 	// sleep if request is throttled
 	if delay > 0 {
 		time.Sleep(time.Duration(delay) * time.Second)
@@ -119,7 +125,7 @@ func downloadFromAPI(client *http.Client, request *Request, delay int64) ([]byte
 			} else {
 				delay = delay * 2
 			}
-			return downloadFromAPI(client, request, delay)
+			return d.downloadFromAPI(client, request, delay)
 		}
 
 		// return an error if other error occurred
@@ -128,10 +134,14 @@ func downloadFromAPI(client *http.Client, request *Request, delay int64) ([]byte
 			request.object.ObjectID, request.object.Name, res.StatusCode)
 	}
 
-	bytes, err := ioutil.ReadAll(reader)
-	if nil != err {
+	bytes := d.bufferPool.Get().([]byte)
+	n, err := io.ReadFull(reader, bytes)
+	if nil != err && err != io.ErrUnexpectedEOF {
+		d.bufferPool.Put(bytes)
 		Log.Debugf("%v", err)
 		return nil, fmt.Errorf("Could not read objects %v (%v) API response", request.object.ObjectID, request.object.Name)
+	} else {
+		Log.Debugf("Downloaded %v bytes of %v (%v)", n, request.object.ObjectID, request.object.Name)
 	}
 
 	return bytes, nil
