@@ -45,3 +45,25 @@ func TestAddToStack(t *testing.T) {
 		t.Fatalf("Expected nil got %v", v)
 	}
 }
+
+func TestLen(t *testing.T) {
+	stack := NewStack(1)
+
+	v := stack.Len()
+	if 0 != v {
+		t.Fatalf("Expected 0 got %v", v)
+	}
+
+	stack.Push("1")
+	v = stack.Len()
+	if 1 != v {
+		t.Fatalf("Expected 1 got %v", v)
+	}
+
+	_ = stack.Pop()
+	v = stack.Len()
+	if 0 != v {
+		t.Fatalf("Expected 0 got %v", v)
+	}
+
+}

@@ -23,6 +23,13 @@ func NewStack(maxChunks int) *Stack {
 	}
 }
 
+// Len gets the number of items on the stack
+func (s *Stack) Len() int {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	return s.len
+}
+
 // Pop pops the first item from the stack
 func (s *Stack) Pop() string {
 	s.lock.Lock()
