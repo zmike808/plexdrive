@@ -67,6 +67,14 @@ func (s *Storage) Clear() error {
 	return nil
 }
 
+// Close open file descriptors
+func (s *Storage) Close() error {
+	if nil != s.ChunkFile {
+		return nil
+	}
+	return s.ChunkFile.Close()
+}
+
 // Load a chunk from storage
 func (s *Storage) Load(id string) *Chunk {
 	s.RLock()
