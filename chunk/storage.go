@@ -25,7 +25,7 @@ type Storage struct {
 }
 
 // NewStorage creates a new storage
-func NewStorage(chunkSize int64, maxChunks int, chunkFilePath string) (*Storage, error) {
+func NewStorage(chunkSize int64, maxChunks int, chunkFile *os.File) (*Storage, error) {
 	storage := Storage{
 		ChunkSize: chunkSize,
 		MaxChunks: maxChunks,
@@ -34,16 +34,10 @@ func NewStorage(chunkSize int64, maxChunks int, chunkFilePath string) (*Storage,
 	}
 
 	// Non-empty string in chunkFilePath enables MMAP disk storage for chunks
-	if chunkFilePath != "" {
-		chunkFile, err := os.OpenFile(chunkFilePath, os.O_RDWR|os.O_CREATE, 0600)
+	if chunkFile != nil {
+		err := chunkFile.Truncate(chunkSize * int64(maxChunks))
 		if nil != err {
-			Log.Debugf("%v", err)
-			return nil, fmt.Errorf("Could not open chunk cache file")
-		}
-		err = chunkFile.Truncate(chunkSize * int64(maxChunks))
-		if nil != err {
-			Log.Debugf("%v", err)
-			return nil, fmt.Errorf("Could not resize chunk cache file")
+			return nil, fmt.Errorf("Could not resize chunk cache file %v: %v", chunkFile.Name(), err)
 		}
 		Log.Infof("Created chunk cache file %v", chunkFile.Name())
 		storage.ChunkFile = chunkFile

@@ -40,7 +40,7 @@ type Response struct {
 
 // NewManager creates a new chunk manager
 func NewManager(
-	chunkFile string,
+	chunkFilePath string,
 	chunkSize int64,
 	loadAhead,
 	checkThreads int,
@@ -48,19 +48,26 @@ func NewManager(
 	client *drive.Client,
 	maxChunks int) (*Manager, error) {
 
+	var err error
+	var chunkFile *os.File
+
 	if chunkSize < 4096 {
 		return nil, fmt.Errorf("Chunk size must not be < 4096")
 	}
 	if chunkSize%1024 != 0 {
 		return nil, fmt.Errorf("Chunk size must be divideable by 1024")
 	}
-	if chunkFile != "" {
+	if chunkFilePath != "" {
 		pageSize := int64(os.Getpagesize())
 		if chunkSize < pageSize {
 			return nil, fmt.Errorf("Chunk size must not be < %v", pageSize)
 		}
 		if chunkSize%pageSize != 0 {
 			return nil, fmt.Errorf("Chunk size must be divideable by %v", pageSize)
+		}
+		chunkFile, err = os.OpenFile(chunkFilePath, os.O_RDWR|os.O_CREATE, 0600)
+		if nil != err {
+			return nil, fmt.Errorf("Could not open chunk cache file %v: %v", chunkFilePath, err)
 		}
 	}
 	if maxChunks < 2 || maxChunks < loadAhead {
@@ -72,7 +79,8 @@ func NewManager(
 		return nil, err
 	}
 
-	if err := storage.Clear(); nil != err {
+	err = storage.Clear()
+	if nil != err {
 		return nil, err
 	}
 
