@@ -3,6 +3,7 @@ package chunk
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 	"syscall"
@@ -15,12 +16,12 @@ var ErrTimeout = errors.New("timeout")
 
 // Storage is a chunk storage
 type Storage struct {
+	sync.RWMutex
 	ChunkFile *os.File
 	ChunkSize int64
 	MaxChunks int
 	chunks    map[string][]byte
 	stack     *Stack
-	lock      sync.RWMutex
 }
 
 // NewStorage creates a new storage
@@ -72,54 +73,57 @@ func (s *Storage) Clear() error {
 	return nil
 }
 
-// Load a chunk from ram or creates it
-func (s *Storage) Load(id string) []byte {
-	s.lock.RLock()
+// Load a chunk from storage
+func (s *Storage) Load(id string) *Chunk {
+	s.RLock()
 	if chunk, exists := s.chunks[id]; exists {
-		s.lock.RUnlock()
 		s.stack.Touch(id)
-		return chunk
+		return NewChunk(chunk, s.RLocker())
 	}
-	s.lock.RUnlock()
+	s.RUnlock()
 	return nil
 }
 
-// Store stores a chunk in the RAM and adds it to the disk storage queue
-func (s *Storage) Store(id string, bytes []byte) error {
-	s.lock.RLock()
-	_, exists := s.chunks[id]
-	s.lock.RUnlock()
+// Copy contents of reader to a chunk in storage and return it
+func (s *Storage) Store(id string, reader io.Reader) (*Chunk, error) {
+	s.RLock()
+	chunk, exists := s.chunks[id]
 
 	// Avoid storing same chunk multiple times
 	if exists {
 		Log.Debugf("Create chunk %v (exists)", id)
 		s.stack.Touch(id)
-		return nil
+		return NewChunk(chunk, s.RLocker()), nil
 	}
 
-	s.lock.Lock()
-	defer s.lock.Unlock()
+	s.RUnlock()
+	s.Lock()
 
-	deleteID := s.stack.Pop()
-	if "" != deleteID {
-		chunk := s.chunks[deleteID]
+	var err error
+	if deleteID := s.stack.Pop(); deleteID != "" {
+		Log.Debugf("Create chunk %v (reused)", id)
+		chunk = s.chunks[deleteID]
+
 		delete(s.chunks, deleteID)
 		Log.Debugf("Deleted chunk %v", deleteID)
-
-		Log.Debugf("Create chunk %v (reused)", id)
-		copy(chunk, bytes)
-		s.chunks[id] = chunk
-		s.stack.Push(id)
 	} else {
 		Log.Debugf("Create chunk %v (stored)", id)
-		chunk, err := s.newChunk()
+		chunk, err = s.newChunk()
 		if err != nil {
-			return err
+			s.Unlock()
+			return nil, err
 		}
-		copy(chunk, bytes)
-		s.chunks[id] = chunk
-		s.stack.Push(id)
 	}
 
-	return nil
+	_, err = io.ReadFull(reader, chunk)
+	s.Unlock()
+	if nil != err && err != io.ErrUnexpectedEOF {
+		return nil, err
+	}
+
+	s.chunks[id] = chunk
+	s.stack.Push(id)
+
+	s.RLock()
+	return NewChunk(chunk, s.RLocker()), nil
 }

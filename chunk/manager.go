@@ -2,12 +2,8 @@ package chunk
 
 import (
 	"fmt"
-	"os"
-	"sync"
-
-	. "github.com/claudetech/loggo/default"
-
 	"math"
+	"os"
 
 	"github.com/dweidenfeld/plexdrive/drive"
 )
@@ -17,7 +13,6 @@ type Manager struct {
 	ChunkSize  int64
 	LoadAhead  int
 	downloader *Downloader
-	storage    *Storage
 	queue      chan *QueueEntry
 }
 
@@ -72,16 +67,16 @@ func NewManager(
 		return nil, fmt.Errorf("max-chunks must be greater than 2 and bigger than the load ahead value")
 	}
 
-	bufferPool := sync.Pool{
-		New: func() interface{} { return make([]byte, chunkSize) },
-	}
-
-	downloader, err := NewDownloader(loadThreads, client, bufferPool)
+	storage, err := NewStorage(chunkSize, maxChunks, chunkFile)
 	if nil != err {
 		return nil, err
 	}
 
-	storage, err := NewStorage(chunkSize, maxChunks, chunkFile)
+	if err := storage.Clear(); nil != err {
+		return nil, err
+	}
+
+	downloader, err := NewDownloader(loadThreads, client, storage)
 	if nil != err {
 		return nil, err
 	}
@@ -90,12 +85,7 @@ func NewManager(
 		ChunkSize:  chunkSize,
 		LoadAhead:  loadAhead,
 		downloader: downloader,
-		storage:    storage,
 		queue:      make(chan *QueueEntry, 100),
-	}
-
-	if err := manager.storage.Clear(); nil != err {
-		return nil, err
 	}
 
 	for i := 0; i < checkThreads; i++ {
@@ -154,16 +144,6 @@ func (m *Manager) thread() {
 }
 
 func (m *Manager) checkChunk(req *Request, response chan Response) {
-	if bytes := m.storage.Load(req.id); nil != bytes {
-		if nil != response {
-			response <- Response{
-				Bytes: adjustResponseChunk(req, bytes),
-			}
-			close(response)
-		}
-		return
-	}
-
 	m.downloader.Download(req, func(err error, bytes []byte) {
 		if nil != err {
 			if nil != response {
@@ -181,10 +161,6 @@ func (m *Manager) checkChunk(req *Request, response chan Response) {
 				Bytes: adjustResponseChunk(req, bytes),
 			}
 			close(response)
-		}
-
-		if err := m.storage.Store(req.id, bytes); nil != err {
-			Log.Warningf("Coult not store chunk %v", req.id)
 		}
 	})
 }
