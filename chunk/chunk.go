@@ -1,8 +1,10 @@
 package chunk
 
-import "sync"
+import (
+	"sync"
+)
 
-// Chunk holds a reference to a chunks bytes from storage and a read lock
+// Chunk holds a reference to a chunks bytes
 type Chunk struct {
 	Bytes []byte
 	lock  sync.Locker

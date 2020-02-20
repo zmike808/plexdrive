@@ -164,7 +164,6 @@ func (m *Manager) checkChunk(req *Request, response chan Response) {
 		}
 
 		if nil != response {
-
 			response <- Response{
 				Bytes: adjustResponseChunk(req, bytes),
 			}

@@ -3,7 +3,6 @@ package chunk
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"sync"
 	"syscall"
@@ -20,8 +19,9 @@ type Storage struct {
 	ChunkFile *os.File
 	ChunkSize int64
 	MaxChunks int
-	chunks    map[string][]byte
+	chunks    map[string]*Chunk
 	stack     *Stack
+	numChunks int
 }
 
 // NewStorage creates a new storage
@@ -29,7 +29,7 @@ func NewStorage(chunkSize int64, maxChunks int, chunkFile *os.File) (*Storage, e
 	storage := Storage{
 		ChunkSize: chunkSize,
 		MaxChunks: maxChunks,
-		chunks:    make(map[string][]byte),
+		chunks:    make(map[string]*Chunk, maxChunks),
 		stack:     NewStack(maxChunks),
 	}
 
@@ -47,18 +47,21 @@ func NewStorage(chunkSize int64, maxChunks int, chunkFile *os.File) (*Storage, e
 }
 
 // newChunk creates a new mmap-backed chunk
-func (s *Storage) newChunk() ([]byte, error) {
+func (s *Storage) newChunk() (*Chunk, error) {
+	if s.numChunks >= s.MaxChunks {
+		return nil, fmt.Errorf("Tried to allocate chunk %v / %v", s.numChunks+1, s.MaxChunks)
+	}
+	Log.Debugf("Allocate chunk %v / %v", s.numChunks+1, s.MaxChunks)
 	if s.ChunkFile != nil {
-		index := int64(s.stack.Len())
-		Log.Debugf("Mmap chunk %v / %v", index+1, s.MaxChunks)
-		chunk, err := syscall.Mmap(int(s.ChunkFile.Fd()), index*s.ChunkSize, int(s.ChunkSize), syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
+		bytes, err := syscall.Mmap(int(s.ChunkFile.Fd()), int64(s.numChunks)*s.ChunkSize, int(s.ChunkSize), syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
 		if err != nil {
 			return nil, err
 		}
-
-		return chunk, nil
+		s.numChunks++
+		return NewChunk(bytes, s.RLocker()), nil
 	} else {
-		return make([]byte, s.ChunkSize), nil
+		s.numChunks++
+		return NewChunk(make([]byte, s.ChunkSize), s.RLocker()), nil
 	}
 }
 
@@ -69,6 +72,8 @@ func (s *Storage) Clear() error {
 
 // Close open file descriptors
 func (s *Storage) Close() error {
+	s.Lock()
+	defer s.Unlock()
 	if nil != s.ChunkFile {
 		return nil
 	}
@@ -78,16 +83,17 @@ func (s *Storage) Close() error {
 // Load a chunk from storage
 func (s *Storage) Load(id string) *Chunk {
 	s.RLock()
-	if chunk, exists := s.chunks[id]; exists {
+	chunk, exists := s.chunks[id]
+	if exists {
 		s.stack.Touch(id)
-		return NewChunk(chunk, s.RLocker())
+		return chunk
 	}
 	s.RUnlock()
 	return nil
 }
 
 // Copy contents of reader to a chunk in storage and return it
-func (s *Storage) Store(id string, reader io.Reader) (*Chunk, error) {
+func (s *Storage) Store(id string, bytes []byte) (*Chunk, error) {
 	s.RLock()
 	chunk, exists := s.chunks[id]
 
@@ -95,37 +101,34 @@ func (s *Storage) Store(id string, reader io.Reader) (*Chunk, error) {
 	if exists {
 		Log.Debugf("Create chunk %v (exists)", id)
 		s.stack.Touch(id)
-		return NewChunk(chunk, s.RLocker()), nil
+		return chunk, nil
 	}
 
 	s.RUnlock()
 	s.Lock()
 
 	var err error
+	// Log.Infof("Stack len %v", s.stack.Len())
 	if deleteID := s.stack.Pop(); deleteID != "" {
-		Log.Debugf("Create chunk %v (reused)", id)
+		Log.Debugf("Create chunk %v (reused %v)", id, deleteID)
 		chunk = s.chunks[deleteID]
-
 		delete(s.chunks, deleteID)
 		Log.Debugf("Deleted chunk %v", deleteID)
 	} else {
 		Log.Debugf("Create chunk %v (stored)", id)
 		chunk, err = s.newChunk()
 		if err != nil {
+			Log.Debugf("newChunk %v failed", id)
 			s.Unlock()
 			return nil, err
 		}
 	}
 
-	_, err = io.ReadFull(reader, chunk)
-	s.Unlock()
-	if nil != err && err != io.ErrUnexpectedEOF {
-		return nil, err
-	}
-
+	copy(chunk.Bytes, bytes)
 	s.chunks[id] = chunk
 	s.stack.Push(id)
+	s.Unlock()
 
 	s.RLock()
-	return NewChunk(chunk, s.RLocker()), nil
+	return chunk, nil
 }

@@ -1,6 +1,7 @@
 package chunk
 
 import (
+	"bytes"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -19,6 +20,7 @@ type Downloader struct {
 	callbacks map[string][]DownloadCallback
 	lock      sync.Mutex
 	storage   *Storage
+	buffers   map[int]bytes.Buffer
 }
 
 type DownloadCallback func(error, []byte)
@@ -30,10 +32,11 @@ func NewDownloader(threads int, client *drive.Client, storage *Storage) (*Downlo
 		queue:     make(chan *Request, 100),
 		callbacks: make(map[string][]DownloadCallback, 100),
 		storage:   storage,
+		buffers:   make(map[int]bytes.Buffer, threads),
 	}
 
 	for i := 0; i < threads; i++ {
-		go manager.thread()
+		go manager.thread(i)
 	}
 
 	return &manager, nil
@@ -56,16 +59,16 @@ func (d *Downloader) Download(req *Request, callback DownloadCallback) {
 	d.lock.Unlock()
 }
 
-func (d *Downloader) thread() {
+func (d *Downloader) thread(id int) {
 	for {
 		req := <-d.queue
-		d.download(d.Client.GetNativeClient(), req)
+		d.download(d.Client.GetNativeClient(), req, id)
 	}
 }
 
-func (d *Downloader) download(client *http.Client, req *Request) {
+func (d *Downloader) download(client *http.Client, req *Request, threadId int) {
 	Log.Debugf("Starting download %v (preload: %v)", req.id, req.preload)
-	chunk, err := d.downloadFromAPI(client, req, 0)
+	chunk, err := d.downloadFromAPI(client, req, 0, threadId)
 
 	d.lock.Lock()
 	callbacks := d.callbacks[req.id]
@@ -73,13 +76,11 @@ func (d *Downloader) download(client *http.Client, req *Request) {
 		callback(err, chunk.Bytes)
 	}
 	delete(d.callbacks, req.id)
-	if nil != chunk {
-		chunk.Close()
-	}
+	chunk.Close()
 	d.lock.Unlock()
 }
 
-func (d *Downloader) downloadFromAPI(client *http.Client, request *Request, delay int64) (*Chunk, error) {
+func (d *Downloader) downloadFromAPI(client *http.Client, request *Request, delay int64, threadId int) (*Chunk, error) {
 	// sleep if request is throttled
 	if delay > 0 {
 		time.Sleep(time.Duration(delay) * time.Second)
@@ -130,7 +131,7 @@ func (d *Downloader) downloadFromAPI(client *http.Client, request *Request, dela
 			} else {
 				delay = delay * 2
 			}
-			return d.downloadFromAPI(client, request, delay)
+			return d.downloadFromAPI(client, request, delay, threadId)
 		}
 
 		// return an error if other error occurred
@@ -139,10 +140,17 @@ func (d *Downloader) downloadFromAPI(client *http.Client, request *Request, dela
 			request.object.ObjectID, request.object.Name, res.StatusCode)
 	}
 
-	chunk, err := d.storage.Store(request.id, reader)
+	buffer := d.buffers[threadId]
+	buffer.Reset()
+	if _, err = buffer.ReadFrom(reader); nil != err {
+		Log.Debug(err)
+		return nil, fmt.Errorf("Could not buffer object %v (%v) API response", request.object.ObjectID, request.object.Name)
+	}
+
+	chunk, err := d.storage.Store(request.id, buffer.Bytes())
 	if nil != err {
-		Log.Debugf("%v", err)
-		return nil, fmt.Errorf("Could store objects %v (%v) API response", request.object.ObjectID, request.object.Name)
+		Log.Debug(err)
+		return nil, fmt.Errorf("Could not store object %v (%v)", request.object.ObjectID, request.object.Name)
 	}
 
 	return chunk, nil

@@ -1,7 +1,6 @@
 package chunk
 
 import (
-	"bytes"
 	"encoding/binary"
 	"io/ioutil"
 	"os"
@@ -79,20 +78,19 @@ func testStore(chunkSize int64, maxChunks int, useMmap bool, n int, errback func
 	}
 	defer storage.Close()
 	data := make([]byte, chunkSize)
-	buffer := bytes.NewReader(data)
 	for i := 0; i < n; i++ {
 		// Populate buffer with binary encoded value of i
 		binary.LittleEndian.PutUint64(data, uint64(i))
-		chunk, err := storage.Store(strconv.Itoa(i), buffer)
+		chunk, err := storage.Store(strconv.Itoa(i), data)
 		if nil != err {
 			errback("Failed to store buffer %v: %v", i, err)
 			return
 		}
-		if j := int(binary.LittleEndian.Uint64(chunk.Bytes)); j != i {
+		j := int(binary.LittleEndian.Uint64(chunk.Bytes))
+		chunk.Close()
+		if j != i {
 			errback("Buffer mismatch – Expected %v got %v", i, j)
 		}
-		chunk.Close()
-		buffer.Seek(0, 0)
 	}
 }
 
@@ -110,20 +108,19 @@ func testLoad(chunkSize int64, maxChunks int, useMmap bool, n int, errback func(
 	}
 	defer storage.Close()
 	data := make([]byte, chunkSize)
-	buffer := bytes.NewReader(data)
 	for i := 0; i < n; i++ {
 		// Populate buffer with binary encoded value of i
 		binary.LittleEndian.PutUint64(data, uint64(i))
-		chunk, err := storage.Store(strconv.Itoa(i), buffer)
+		chunk, err := storage.Store(strconv.Itoa(i), data)
 		if nil != err {
 			errback("Failed to store buffer %v: %v", i, err)
 			return
 		}
-		if j := int(binary.LittleEndian.Uint64(chunk.Bytes)); j != i {
+		j := int(binary.LittleEndian.Uint64(chunk.Bytes))
+		chunk.Close()
+		if j != i {
 			errback("Buffer mismatch – Expected %v got %v", i, j)
 		}
-		chunk.Close()
-		buffer.Seek(0, 0)
 	}
 	for i := 0; i < n; i++ {
 		// Populate buffer with binary encoded value of i
@@ -133,10 +130,11 @@ func testLoad(chunkSize int64, maxChunks int, useMmap bool, n int, errback func(
 			errback("Chunk %v not found", i)
 			return
 		} else {
-			if j := int(binary.LittleEndian.Uint64(chunk.Bytes)); j != i {
+			j := int(binary.LittleEndian.Uint64(chunk.Bytes))
+			chunk.Close()
+			if j != i {
 				errback("Buffer mismatch – Expected %v got %v", i, j)
 			}
-			chunk.Close()
 		}
 	}
 }
