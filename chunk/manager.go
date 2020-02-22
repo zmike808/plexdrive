@@ -137,9 +137,8 @@ func (m *Manager) checkChunk(req *Request, response chan Response) {
 	if buffer := m.storage.Load(req.id); nil != buffer {
 		if nil != response {
 			buffer.Ref()
-			bytes := buffer.Bytes()
 			response <- Response{
-				Bytes: adjustResponseChunk(req, bytes),
+				Bytes: adjustResponseChunk(req, buffer.Bytes()),
 				Free:  func() { buffer.Unref() },
 			}
 			close(response)
@@ -161,9 +160,8 @@ func (m *Manager) checkChunk(req *Request, response chan Response) {
 
 		if nil != response {
 			buffer.Ref()
-			bytes := buffer.Bytes()
 			response <- Response{
-				Bytes: adjustResponseChunk(req, bytes),
+				Bytes: adjustResponseChunk(req, buffer.Bytes()),
 				Free:  func() { buffer.Unref() },
 			}
 			close(response)
