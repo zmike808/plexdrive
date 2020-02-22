@@ -16,10 +16,10 @@ type Manager struct {
 	LoadAhead  int
 	downloader *Downloader
 	storage    *Storage
-	queue      chan *QueueEntry
+	queue      chan *queueEntry
 }
 
-type QueueEntry struct {
+type queueEntry struct {
 	request  *Request
 	response chan Response
 }
@@ -70,7 +70,7 @@ func NewManager(
 		LoadAhead:  loadAhead,
 		downloader: downloader,
 		storage:    NewStorage(chunkSize, maxChunks),
-		queue:      make(chan *QueueEntry, 100),
+		queue:      make(chan *queueEntry, 100),
 	}
 
 	if err := manager.storage.Clear(); nil != err {
@@ -101,7 +101,7 @@ func (m *Manager) GetChunk(object *drive.APIObject, offset, size int64, response
 		preload:        false,
 	}
 
-	m.queue <- &QueueEntry{
+	m.queue <- &queueEntry{
 		request:  request,
 		response: response,
 	}
@@ -118,7 +118,7 @@ func (m *Manager) GetChunk(object *drive.APIObject, offset, size int64, response
 				offsetEnd:   aheadOffsetEnd,
 				preload:     true,
 			}
-			m.queue <- &QueueEntry{
+			m.queue <- &queueEntry{
 				request: request,
 			}
 		}
