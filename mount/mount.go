@@ -242,6 +242,8 @@ func (o *Object) Read(ctx context.Context, req *fuse.ReadRequest, resp *fuse.Rea
 	}
 
 	resp.Data = res.Bytes
+	// We didn't copy the bytes, mark as freed anyways (unsafe)
+	res.Free()
 	return nil
 }
 

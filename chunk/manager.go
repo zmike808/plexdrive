@@ -2,11 +2,9 @@ package chunk
 
 import (
 	"fmt"
-
-	. "github.com/claudetech/loggo/default"
-
 	"math"
 
+	. "github.com/claudetech/loggo/default"
 	"github.com/dweidenfeld/plexdrive/drive"
 )
 
@@ -39,6 +37,7 @@ type Request struct {
 type Response struct {
 	Error error
 	Bytes []byte
+	Free  func()
 }
 
 // NewManager creates a new chunk manager
@@ -133,17 +132,21 @@ func (m *Manager) thread() {
 }
 
 func (m *Manager) checkChunk(req *Request, response chan Response) {
-	if bytes := m.storage.Load(req.id); nil != bytes {
+	if buffer := m.storage.Load(req.id); nil != buffer {
 		if nil != response {
+			buffer.Ref()
+			bytes := buffer.Bytes()
 			response <- Response{
 				Bytes: adjustResponseChunk(req, bytes),
+				Free:  func() { buffer.Unref() },
 			}
 			close(response)
 		}
+		buffer.Unref()
 		return
 	}
 
-	m.downloader.Download(req, func(err error, bytes []byte) {
+	m.downloader.Download(req, func(err error, buffer *Buffer) {
 		if nil != err {
 			if nil != response {
 				response <- Response{
@@ -155,14 +158,16 @@ func (m *Manager) checkChunk(req *Request, response chan Response) {
 		}
 
 		if nil != response {
-
+			buffer.Ref()
+			bytes := buffer.Bytes()
 			response <- Response{
 				Bytes: adjustResponseChunk(req, bytes),
+				Free:  func() { buffer.Unref() },
 			}
 			close(response)
 		}
 
-		if err := m.storage.Store(req.id, bytes); nil != err {
+		if err := m.storage.Store(req.id, buffer); nil != err {
 			Log.Warningf("Coult not store chunk %v", req.id)
 		}
 	})
