@@ -232,18 +232,22 @@ func (o *Object) Lookup(ctx context.Context, name string) (fs.Node, error) {
 
 // Read reads some bytes or the whole file
 func (o *Object) Read(ctx context.Context, req *fuse.ReadRequest, resp *fuse.ReadResponse) error {
-	response := make(chan chunk.Response)
-	o.chunkManager.GetChunk(o.object, req.Offset, int64(req.Size), response)
-	res := <-response
+	resp.Data = make([]byte, req.Size, req.Size)
 
-	if nil != res.Error {
-		Log.Warningf("%v", res.Error)
-		return fuse.EIO
+	// Handle unaligned requests across chunk boundaries (Direct-IO)
+	for read := 0; read < req.Size; {
+		response := make(chan chunk.Response)
+		o.chunkManager.GetChunk(o.object, req.Offset+int64(read), int64(req.Size-read), response)
+		res := <-response
+		if nil != res.Error {
+			Log.Warningf("%v", res.Error)
+			return fuse.EIO
+		}
+
+		read += copy(resp.Data[read:], res.Bytes)
+		// We didn't copy the bytes, mark as freed anyways (unsafe)
+		res.Free()
 	}
-
-	resp.Data = res.Bytes
-	// We didn't copy the bytes, mark as freed anyways (unsafe)
-	res.Free()
 	return nil
 }
 
