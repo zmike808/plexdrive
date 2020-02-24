@@ -251,6 +251,12 @@ func (o *Object) Read(ctx context.Context, req *fuse.ReadRequest, resp *fuse.Rea
 	return nil
 }
 
+// Open a file
+func (o *Object) Open(ctx context.Context, req *fuse.OpenRequest, resp *fuse.OpenResponse) (fs.Handle, error) {
+	resp.Flags |= fuse.OpenDirectIO
+	return o, nil
+}
+
 // Remove deletes an element
 func (o *Object) Remove(ctx context.Context, req *fuse.RemoveRequest) error {
 	obj, err := o.client.GetObjectByParentAndName(o.object.ObjectID, req.Name)
