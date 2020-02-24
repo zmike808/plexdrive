@@ -50,7 +50,7 @@ func (bp *BufferPool) Put(buffer *Buffer) {
 
 func (bp *BufferPool) newBuffer(content []byte) *Buffer {
 	id := bp.free()
-	bytes := make([]byte, len(content))
+	bytes := make([]byte, len(content), len(content))
 	copy(bytes, content)
 	return &Buffer{bytes, id, 0, bp}
 }
@@ -69,21 +69,16 @@ func (bp *BufferPool) used() int {
 
 // Buffer is a managed memory buffer with a reference counter
 type Buffer struct {
-	bytes []byte
+	Bytes []byte
 	id    int
 	refs  int64
 
 	pool *BufferPool
 }
 
-// Bytes from the buffer
-func (b *Buffer) Bytes() []byte {
-	return b.bytes
-}
-
 // ReadFrom reader into the buffer
 func (b *Buffer) ReadFrom(r io.Reader) (int64, error) {
-	n, err := io.ReadFull(r, b.bytes)
+	n, err := io.ReadFull(r, b.Bytes)
 	if err == io.ErrUnexpectedEOF {
 		err = nil // Ignore short reads
 	}

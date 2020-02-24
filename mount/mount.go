@@ -241,9 +241,10 @@ func (o *Object) Read(ctx context.Context, req *fuse.ReadRequest, resp *fuse.Rea
 		return fuse.EIO
 	}
 
-	resp.Data = res.Bytes
+	resp.ZeroCopy = true
+	resp.Data = res.Buffer.Bytes
 	// We didn't copy the bytes, mark as freed anyways (unsafe)
-	res.Free()
+	res.Buffer.Unref()
 	return nil
 }
 

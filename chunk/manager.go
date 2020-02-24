@@ -15,6 +15,7 @@ type Manager struct {
 	downloader *Downloader
 	storage    *Storage
 	queue      chan *queueEntry
+	bufferPool *BufferPool
 }
 
 type queueEntry struct {
@@ -35,9 +36,8 @@ type Request struct {
 
 // Response represetns a chunk response
 type Response struct {
-	Error error
-	Bytes []byte
-	Free  func()
+	Error  error
+	Buffer *Buffer
 }
 
 // NewManager creates a new chunk manager
@@ -66,12 +66,14 @@ func NewManager(
 		return nil, err
 	}
 
+	fuseReadResponseSize := 256*4096 + 16 // FUSE_MAX_PAGES * PAGE_SIZE + unsafe.Sizeof(fuse.outHeader{})
 	manager := Manager{
 		ChunkSize:  chunkSize,
 		LoadAhead:  loadAhead,
 		downloader: downloader,
 		storage:    NewStorage(chunkSize, maxChunks),
 		queue:      make(chan *queueEntry, 100),
+		bufferPool: NewBufferPool(checkThreads, int64(fuseReadResponseSize)),
 	}
 
 	if err := manager.storage.Clear(); nil != err {
@@ -134,20 +136,25 @@ func (m *Manager) thread() {
 }
 
 func (m *Manager) checkChunk(req *Request, response chan Response) {
-	if buffer := m.storage.Load(req.id); nil != buffer {
+	if chunk := m.storage.Load(req.id); nil != chunk {
 		if nil != response {
+			buffer := m.bufferPool.Get()
 			buffer.Ref()
+
+			bytes := adjustResponseChunk(req, chunk.Bytes)
+			copy(buffer.Bytes[16:], bytes)
+			buffer.Bytes = buffer.Bytes[:16+len(bytes)]
+
 			response <- Response{
-				Bytes: adjustResponseChunk(req, buffer.Bytes()),
-				Free:  func() { buffer.Unref() },
+				Buffer: buffer,
 			}
 			close(response)
 		}
-		buffer.Unref()
+		chunk.Unref()
 		return
 	}
 
-	m.downloader.Download(req, func(err error, buffer *Buffer) {
+	m.downloader.Download(req, func(err error, chunk *Buffer) {
 		if nil != err {
 			if nil != response {
 				response <- Response{
@@ -159,15 +166,20 @@ func (m *Manager) checkChunk(req *Request, response chan Response) {
 		}
 
 		if nil != response {
+			buffer := m.bufferPool.Get()
 			buffer.Ref()
+
+			bytes := adjustResponseChunk(req, chunk.Bytes)
+			copy(buffer.Bytes[16:], bytes)
+			buffer.Bytes = buffer.Bytes[:16+len(bytes)]
+
 			response <- Response{
-				Bytes: adjustResponseChunk(req, buffer.Bytes()),
-				Free:  func() { buffer.Unref() },
+				Buffer: buffer,
 			}
 			close(response)
 		}
 
-		if err := m.storage.Store(req.id, buffer); nil != err {
+		if err := m.storage.Store(req.id, chunk); nil != err {
 			Log.Warningf("Coult not store chunk %v", req.id)
 		}
 	})
