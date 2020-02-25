@@ -85,8 +85,8 @@ func NewManager(
 }
 
 // GetChunk loads one chunk and starts the preload for the next chunks
-func (m *Manager) GetChunk(object *drive.APIObject, offset, size int64) ([]byte, error) {
-	data := make([]byte, size, size)
+func (m *Manager) GetChunk(object *drive.APIObject, offset, size int64, padding int64) ([]byte, error) {
+	data := make([]byte, padding+size, padding+size)
 
 	// Handle unaligned requests across chunk boundaries (Direct-IO)
 	for read := int64(0); read < size; {
@@ -100,7 +100,7 @@ func (m *Manager) GetChunk(object *drive.APIObject, offset, size int64) ([]byte,
 		}
 
 		bytes := adjustResponseChunk(offset+read, size-read, m.ChunkSize, res.Buffer.Bytes())
-		read += int64(copy(data[read:], bytes))
+		read += int64(copy(data[padding+read:], bytes))
 
 		res.Buffer.Unref()
 	}
