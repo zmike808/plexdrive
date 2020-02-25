@@ -50,7 +50,7 @@ func (bp *BufferPool) Put(buffer *Buffer) {
 
 func (bp *BufferPool) newBuffer(content []byte) *Buffer {
 	id := bp.free()
-	bytes := make([]byte, len(content))
+	bytes := make([]byte, len(content), len(content))
 	copy(bytes, content)
 	return &Buffer{bytes, id, 0, bp}
 }
@@ -105,6 +105,7 @@ func (b *Buffer) Unref() {
 	}
 	if refs == 0 {
 		Log.Tracef("Return buffer %v", b.id)
+		b.bytes = b.bytes[:cap(b.bytes)]
 		b.pool.Put(b)
 	}
 }
