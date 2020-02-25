@@ -34,8 +34,8 @@ type Request struct {
 
 // Response represetns a chunk response
 type Response struct {
-	Error  error
-	Buffer *Buffer
+	Error error
+	Bytes []byte
 }
 
 // NewManager creates a new chunk manager
@@ -59,9 +59,9 @@ func NewManager(
 
 	bufferPool := NewBufferPool(maxChunks+loadThreads, chunkSize)
 
-	storage := NewStorage(chunkSize, maxChunks)
+	storage := NewStorage(chunkSize, maxChunks, bufferPool)
 
-	downloader, err := NewDownloader(loadThreads, client, bufferPool, storage)
+	downloader, err := NewDownloader(loadThreads, client, storage)
 	if nil != err {
 		return nil, err
 	}
@@ -109,10 +109,7 @@ func (m *Manager) GetChunk(object *drive.APIObject, offset, size int64) ([]byte,
 			return nil, res.Error
 		}
 
-		bytes := adjustResponseChunk(offset+read, size-read, m.ChunkSize, res.Buffer.Bytes())
-		n := copy(data[read:], bytes)
-
-		res.Buffer.Unref()
+		n := copy(data[read:], res.Bytes)
 
 		if n == 0 {
 			return nil, fmt.Errorf("Short read of %v at offset %v only %v / %v bytes", object.ObjectID, offset, read, size)
@@ -171,19 +168,17 @@ func (m *Manager) thread() {
 }
 
 func (m *Manager) checkChunk(req *Request, response chan Response) {
-	if buffer := m.storage.Load(req.id); nil != buffer {
+	if chunk := m.storage.Load(req.id); nil != chunk {
 		if nil != response {
-			buffer.Ref()
 			response <- Response{
-				Buffer: buffer,
+				Bytes: adjustResponseChunk(req, chunk),
 			}
 			close(response)
 		}
-		buffer.Unref()
 		return
 	}
 
-	m.downloader.Download(req, func(err error, buffer *Buffer) {
+	m.downloader.Download(req, func(err error, chunk []byte) {
 		if nil != err {
 			if nil != response {
 				response <- Response{
@@ -195,23 +190,18 @@ func (m *Manager) checkChunk(req *Request, response chan Response) {
 		}
 
 		if nil != response {
-			buffer.Ref()
 			response <- Response{
-				Buffer: buffer,
+				Bytes: adjustResponseChunk(req, chunk),
 			}
 			close(response)
 		}
 	})
 }
 
-func adjustResponseChunk(offset, size, chunkSize int64, bytes []byte) []byte {
-	chunkOffset := offset % chunkSize
-	chunkOffsetEnd := chunkOffset + size
+func adjustResponseChunk(req *Request, bytes []byte) []byte {
 	bytesLen := int64(len(bytes))
-
-	sOffset := min(chunkOffset, bytesLen)
-	eOffset := min(chunkOffsetEnd, bytesLen)
-
+	sOffset := min(req.chunkOffset, bytesLen)
+	eOffset := min(req.chunkOffsetEnd, bytesLen)
 	return bytes[sOffset:eOffset]
 }
 
