@@ -2,6 +2,7 @@ package chunk
 
 import (
 	"fmt"
+	"syscall"
 
 	"github.com/dweidenfeld/plexdrive/drive"
 )
@@ -13,6 +14,7 @@ type Manager struct {
 	downloader *Downloader
 	storage    *Storage
 	queue      chan *queueEntry
+	bufferPool *BufferPool
 }
 
 type queueEntry struct {
@@ -44,16 +46,21 @@ func NewManager(
 	checkThreads int,
 	loadThreads int,
 	client *drive.Client,
-	maxChunks int) (*Manager, error) {
+	maxChunks int,
+	maxPages int) (*Manager, error) {
 
-	if chunkSize < 4096 {
-		return nil, fmt.Errorf("Chunk size must not be < 4096")
+	pageSize := int64(syscall.Getpagesize())
+	if chunkSize < pageSize {
+		return nil, fmt.Errorf("Chunk size must not be < %v", pageSize)
 	}
-	if chunkSize%1024 != 0 {
-		return nil, fmt.Errorf("Chunk size must be divideable by 1024")
+	if chunkSize%pageSize != 0 {
+		return nil, fmt.Errorf("Chunk size must be divideable by %v", pageSize)
 	}
 	if maxChunks < 2 || maxChunks < loadAhead {
 		return nil, fmt.Errorf("max-chunks must be greater than 2 and bigger than the load ahead value")
+	}
+	if maxPages < 32 || maxPages > 256 {
+		return nil, fmt.Errorf("Max pages must not be between 32 (FUSE default) and 256 (FUSE max)")
 	}
 
 	bufferPool := NewBufferPool(maxChunks+loadThreads, chunkSize)
@@ -71,6 +78,7 @@ func NewManager(
 		downloader: downloader,
 		storage:    storage,
 		queue:      make(chan *queueEntry, 100),
+		bufferPool: NewBufferPool(checkThreads+loadThreads, int64(maxPages)*pageSize+16),
 	}
 
 	if err := manager.storage.Clear(); nil != err {
@@ -86,7 +94,9 @@ func NewManager(
 
 // GetChunk loads one chunk and starts the preload for the next chunks
 func (m *Manager) GetChunk(object *drive.APIObject, offset, size int64, padding int64) ([]byte, error) {
-	data := make([]byte, padding+size, padding+size)
+	buffer := m.bufferPool.Get()
+	buffer.Ref()
+	data := buffer.Bytes()[:padding+size]
 
 	// Handle unaligned requests across chunk boundaries (Direct-IO)
 	for read := int64(0); read < size; {
@@ -104,6 +114,11 @@ func (m *Manager) GetChunk(object *drive.APIObject, offset, size int64, padding 
 
 		res.Buffer.Unref()
 	}
+
+	// Early unref, should be safe as long as bufferPool is properly sized.
+	// We also know that the fuse package will copy the data when handling
+	// the ReadResponse.
+	buffer.Unref()
 	return data, nil
 }
 

@@ -27,6 +27,12 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// FUSE default for max pages per message.
+//
+// Recent Linux FUSE versions support up to 256 pages,
+// but the fuse package does not support that yet.
+const fuseMaxPages = 32
+
 func main() {
 	// Find users home directory
 	usr, err := user.Current()
@@ -186,7 +192,8 @@ func main() {
 			*argChunkCheckThreads,
 			*argChunkLoadThreads,
 			client,
-			*argMaxChunks)
+			*argMaxChunks,
+			fuseMaxPages)
 		if nil != err {
 			Log.Errorf("%v", err)
 			os.Exit(4)
