@@ -92,7 +92,7 @@ func (d *Downloader) downloadFromAPI(client *http.Client, request *Request, dela
 		return nil, fmt.Errorf("Could not create request object %v (%v) from API", request.object.ObjectID, request.object.Name)
 	}
 
-	req.Header.Add("Range", fmt.Sprintf("bytes=%v-%v", request.offsetStart, request.offsetEnd))
+	req.Header.Add("Range", fmt.Sprintf("bytes=%v-%v", request.offsetStart, request.offsetEnd-1))
 
 	Log.Tracef("Sending HTTP Request %v", req)
 
