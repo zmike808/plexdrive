@@ -2,7 +2,6 @@ package chunk
 
 import (
 	"fmt"
-	"math"
 
 	. "github.com/claudetech/loggo/default"
 	"github.com/dweidenfeld/plexdrive/drive"
@@ -35,9 +34,8 @@ type Request struct {
 
 // Response represetns a chunk response
 type Response struct {
-	Error error
-	Bytes []byte
-	Free  func()
+	Error  error
+	Buffer *Buffer
 }
 
 // NewManager creates a new chunk manager
@@ -86,7 +84,44 @@ func NewManager(
 }
 
 // GetChunk loads one chunk and starts the preload for the next chunks
-func (m *Manager) GetChunk(object *drive.APIObject, offset, size int64, response chan Response) {
+func (m *Manager) GetChunk(object *drive.APIObject, offset, size int64) ([]byte, error) {
+	maxOffset := int64(object.Size)
+	if offset > maxOffset {
+		return nil, fmt.Errorf("Tried to read past EOF of %v at offset %v", object.ObjectID, offset)
+	}
+	if offset+size > maxOffset {
+		size = int64(object.Size) - offset
+		Log.Debugf("Adjusting read past EOF of %v at offset %v to %v bytes", object.ObjectID, offset, size)
+	}
+
+	data := make([]byte, size, size)
+
+	// Handle unaligned requests across chunk boundaries (Direct-IO)
+	for read := int64(0); read < size; {
+		response := make(chan Response)
+
+		m.requestChunk(object, offset+read, size-read, response)
+
+		res := <-response
+		if nil != res.Error {
+			return nil, res.Error
+		}
+
+		bytes := adjustResponseChunk(offset+read, size-read, m.ChunkSize, res.Buffer.Bytes())
+		n := copy(data[read:], bytes)
+
+		res.Buffer.Unref()
+
+		if n == 0 {
+			return nil, fmt.Errorf("Short read of %v at offset %v only %v / %v bytes", object.ObjectID, offset, read, size)
+		}
+
+		read += int64(n)
+	}
+	return data, nil
+}
+
+func (m *Manager) requestChunk(object *drive.APIObject, offset, size int64, response chan Response) {
 	chunkOffset := offset % m.ChunkSize
 	offsetStart := offset - chunkOffset
 	offsetEnd := offsetStart + m.ChunkSize
@@ -138,8 +173,7 @@ func (m *Manager) checkChunk(req *Request, response chan Response) {
 		if nil != response {
 			buffer.Ref()
 			response <- Response{
-				Bytes: adjustResponseChunk(req, buffer.Bytes()),
-				Free:  func() { buffer.Unref() },
+				Buffer: buffer,
 			}
 			close(response)
 		}
@@ -161,8 +195,7 @@ func (m *Manager) checkChunk(req *Request, response chan Response) {
 		if nil != response {
 			buffer.Ref()
 			response <- Response{
-				Bytes: adjustResponseChunk(req, buffer.Bytes()),
-				Free:  func() { buffer.Unref() },
+				Buffer: buffer,
 			}
 			close(response)
 		}
@@ -173,9 +206,20 @@ func (m *Manager) checkChunk(req *Request, response chan Response) {
 	})
 }
 
-func adjustResponseChunk(req *Request, bytes []byte) []byte {
-	sOffset := int64(math.Min(float64(req.chunkOffset), float64(len(bytes))))
-	eOffset := int64(math.Min(float64(req.chunkOffsetEnd), float64(len(bytes))))
+func adjustResponseChunk(offset, size, chunkSize int64, bytes []byte) []byte {
+	chunkOffset := offset % chunkSize
+	chunkOffsetEnd := chunkOffset + size
+	bytesLen := int64(len(bytes))
+
+	sOffset := min(chunkOffset, bytesLen)
+	eOffset := min(chunkOffsetEnd, bytesLen)
 
 	return bytes[sOffset:eOffset]
+}
+
+func min(x, y int64) int64 {
+	if x < y {
+		return x
+	}
+	return y
 }
