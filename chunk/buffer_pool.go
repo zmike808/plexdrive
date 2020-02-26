@@ -6,7 +6,8 @@ import (
 
 // BufferPool manages a pool of buffers
 type BufferPool struct {
-	pool chan []byte
+	bufferSize int64
+	pool       chan []byte
 }
 
 // NewBufferPool creates a new buffer pool
@@ -15,7 +16,8 @@ func NewBufferPool(size int, bufferSize int64) *BufferPool {
 		panic("Invalid buffer pool size")
 	}
 	bp := &BufferPool{
-		pool: make(chan []byte, size),
+		bufferSize: bufferSize,
+		pool:       make(chan []byte, size),
 	}
 	for i := 0; i < size; i++ {
 		bp.pool <- make([]byte, bufferSize, bufferSize)
@@ -29,11 +31,12 @@ func (bp *BufferPool) Get() []byte {
 	select {
 	case buffer := <-bp.pool:
 		Log.Debugf("Buffer pool usage %v / %v (get)", bp.used(), bp.size())
+		return buffer
 	default:
-		Log.Fatalf("Buffer pool usage %v / %v (blocking get)", bp.used(), bp.size())
-		panic("Buffer pool blocking during Get")
+		Log.Errorf("Buffer pool usage %v / %v (blocking get)", bp.used(), bp.size())
+		buffer := make([]byte, bp.bufferSize, bp.bufferSize)
+		return buffer
 	}
-	return buffer
 }
 
 // Put a buffer into the pool
@@ -43,8 +46,7 @@ func (bp *BufferPool) Put(buffer []byte) {
 	case bp.pool <- buffer:
 		Log.Debugf("Buffer pool usage %v / %v (put)", bp.used(), bp.size())
 	default:
-		Log.Fatalf("Buffer pool usage %v / %v (blocking put)", bp.used(), bp.size())
-		panic("Buffer pool blocking during Put")
+		Log.Errorf("Buffer pool usage %v / %v (blocking put)", bp.used(), bp.size())
 	}
 }
 
