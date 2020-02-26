@@ -29,13 +29,15 @@ type Request struct {
 	offsetEnd      int64
 	chunkOffset    int64
 	chunkOffsetEnd int64
+	sequence       int
 	preload        bool
 }
 
 // Response represetns a chunk response
 type Response struct {
-	Error  error
-	Buffer *Buffer
+	Sequence int
+	Error    error
+	Buffer   *Buffer
 }
 
 // NewManager creates a new chunk manager
@@ -85,28 +87,51 @@ func NewManager(
 
 // GetChunk loads one chunk and starts the preload for the next chunks
 func (m *Manager) GetChunk(object *drive.APIObject, offset, size int64) ([]byte, error) {
+	maxOffset := int64(object.Size)
+	if offset > maxOffset {
+		return nil, fmt.Errorf("Tried to read past EOF of %v at offset %v", object.ObjectID, offset)
+	}
+	if offset+size > maxOffset {
+		size = int64(object.Size) - offset
+	}
+
+	ranges := splitChunkRanges(offset, size, m.ChunkSize)
+	responses := make(chan Response, len(ranges))
+
+	for i, r := range ranges {
+		m.requestChunk(object, r.offset, r.size, i, responses)
+	}
+
 	data := make([]byte, size, size)
-
-	// Handle unaligned requests across chunk boundaries (Direct-IO)
-	for read := int64(0); read < size; {
-		response := make(chan Response)
-
-		m.requestChunk(object, offset+read, size-read, response)
-
-		res := <-response
+	for i := 0; i < cap(responses); i++ {
+		res := <-responses
 		if nil != res.Error {
 			return nil, res.Error
 		}
 
-		bytes := adjustResponseChunk(offset+read, size-read, m.ChunkSize, res.Buffer.Bytes())
-		read += int64(copy(data[read:], bytes))
+		var offset int64
+		if res.Sequence > 0 {
+			// Offset is the size of the previous byte range
+			offset = ranges[res.Sequence-1].size
+		}
+
+		r := ranges[res.Sequence]
+		bytes := adjustResponseChunk(r.offset, r.size, m.ChunkSize, res.Buffer.Bytes())
+
+		n := copy(data[offset:], bytes)
 
 		res.Buffer.Unref()
+
+		if n == 0 {
+			return nil, fmt.Errorf("Request %v slice %v has empty response", object.ObjectID, res.Sequence)
+		}
 	}
+	close(responses)
+
 	return data, nil
 }
 
-func (m *Manager) requestChunk(object *drive.APIObject, offset, size int64, response chan Response) {
+func (m *Manager) requestChunk(object *drive.APIObject, offset, size int64, sequence int, response chan Response) {
 	chunkOffset := offset % m.ChunkSize
 	offsetStart := offset - chunkOffset
 	offsetEnd := offsetStart + m.ChunkSize
@@ -119,6 +144,7 @@ func (m *Manager) requestChunk(object *drive.APIObject, offset, size int64, resp
 		offsetEnd:      offsetEnd,
 		chunkOffset:    chunkOffset,
 		chunkOffsetEnd: chunkOffset + size,
+		sequence:       sequence,
 		preload:        false,
 	}
 
@@ -146,6 +172,24 @@ func (m *Manager) requestChunk(object *drive.APIObject, offset, size int64, resp
 	}
 }
 
+type byteRange struct {
+	offset, size int64
+}
+
+// Calculate request ranges that span multiple chunks
+//
+// This can happen with Direct-IO and unaligned reads or
+// if the size is bigger than the chunk size.
+func splitChunkRanges(offset, size, chunkSize int64) []byteRange {
+	ranges := make([]byteRange, 0, size/chunkSize+2)
+	for remaining := size; remaining > 0; remaining -= size {
+		size = min(remaining, chunkSize-offset%chunkSize)
+		ranges = append(ranges, byteRange{offset, size})
+		offset += size
+	}
+	return ranges
+}
+
 func (m *Manager) thread() {
 	for {
 		queueEntry := <-m.queue
@@ -158,9 +202,9 @@ func (m *Manager) checkChunk(req *Request, response chan Response) {
 		if nil != response {
 			buffer.Ref()
 			response <- Response{
-				Buffer: buffer,
+				Sequence: req.sequence,
+				Buffer:   buffer,
 			}
-			close(response)
 		}
 		buffer.Unref()
 		return
@@ -170,9 +214,9 @@ func (m *Manager) checkChunk(req *Request, response chan Response) {
 		if nil != err {
 			if nil != response {
 				response <- Response{
-					Error: err,
+					Sequence: req.sequence,
+					Error:    err,
 				}
-				close(response)
 			}
 			return
 		}
@@ -180,9 +224,9 @@ func (m *Manager) checkChunk(req *Request, response chan Response) {
 		if nil != response {
 			buffer.Ref()
 			response <- Response{
-				Buffer: buffer,
+				Sequence: req.sequence,
+				Buffer:   buffer,
 			}
-			close(response)
 		}
 
 		if err := m.storage.Store(req.id, buffer); nil != err {
