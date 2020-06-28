@@ -61,7 +61,7 @@ func NewManager(
 		return nil, fmt.Errorf("max-chunks must be greater than 2 and bigger than the load ahead value")
 	}
 
-	bufferPool, err := NewBufferPool(maxChunks+loadThreads+checkThreads+2, chunkSize, chunkFile)
+	bufferPool, err := NewBufferPool(maxChunks+loadThreads, chunkSize, chunkFile)
 	if nil != err {
 		return nil, err
 	}
