@@ -84,3 +84,27 @@ func (s *Storage) Store(id string, chunk []byte) error {
 
 	return nil
 }
+
+// Get a buffer without exceeding max chunks
+func (s *Storage) NewChunk(id string) []byte {
+	s.lock.Lock()
+	deleteID := s.stack.Pop()
+	if chunk, exists := s.chunks[deleteID]; exists {
+		delete(s.chunks, deleteID)
+		Log.Debugf("Deleted chunk %v", deleteID)
+		s.stack.Push(id)
+		s.lock.Unlock()
+		return chunk
+	}
+	s.stack.Push(id)
+	s.lock.Unlock()
+	return s.BufferPool.Get()
+}
+
+// Release a buffer from NewChunk without storing it
+func (s *Storage) FreeChunk(id string, chunk []byte) {
+	s.lock.Lock()
+	s.stack.Purge(id)
+	s.BufferPool.Put(chunk)
+	s.lock.Unlock()
+}

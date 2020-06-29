@@ -67,3 +67,13 @@ func (s *Stack) Push(id string) {
 	s.len++
 	s.lock.Unlock()
 }
+
+// Purge removes an item from the stack
+func (s *Stack) Purge(id string) {
+	s.lock.Lock()
+	item, exists := s.index[id]
+	if exists {
+		s.items.MoveToFront(item)
+	}
+	s.lock.Unlock()
+}

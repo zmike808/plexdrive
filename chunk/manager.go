@@ -57,11 +57,14 @@ func NewManager(
 	if chunkSize%pageSize != 0 {
 		return nil, fmt.Errorf("Chunk size must be divideable by %v", pageSize)
 	}
-	if maxChunks < 2 || maxChunks < loadAhead {
-		return nil, fmt.Errorf("max-chunks must be greater than 2 and bigger than the load ahead value")
+	if maxChunks < loadThreads*(loadAhead+1) {
+		return nil, fmt.Errorf("max-chunks must be at least %v", loadThreads*(loadAhead+1))
+	}
+	if maxChunks < 2 {
+		return nil, fmt.Errorf("max-chunks must be greater than 2")
 	}
 
-	bufferPool, err := NewBufferPool(maxChunks+loadThreads, chunkSize, chunkFile)
+	bufferPool, err := NewBufferPool(maxChunks, chunkSize, chunkFile)
 	if nil != err {
 		return nil, err
 	}
